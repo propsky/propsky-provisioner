@@ -414,10 +414,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "啟動檢查失敗", str(exc))
             return
         self._save_settings()
-        snapshot = self.snapshots[index]
-        snapshot.state = SlotState.RUNNING
-        snapshot.message = "正在連線..."
-        snapshot.logs.clear()
+        snapshot = SlotSnapshot(
+            slot=slot,
+            port=port,
+            state=SlotState.RUNNING,
+            message="正在連線...",
+        )
+        self.snapshots[index] = snapshot
         self._start_log(slot, port)
         self.cards[index].set_snapshot(snapshot)
         worker = ProvisionWorker(slot, self.root, port, None, self.ssid.text(), self.password.text(), firmware, self.ledger, self._allocate_card)
@@ -606,7 +609,7 @@ class MainWindow(QMainWindow):
              QLabel#bigStatus { font-size: 32px; font-weight: 800; }
             QLabel#steps { background: #eef0f3; border-radius: 3px; padding: 5px; color: #6b7380; }
             QLabel#prompt { background: #fff8e1; border: 1px dashed #e0a100; border-radius: 5px; padding: 7px; }
-            QLabel#terminal { background: #15181c; color: #c9d1d9; font-family: Consolas, monospace; padding: 12px; }
+             QPlainTextEdit#terminal { background: #15181c; color: #c9d1d9; font-family: Consolas, monospace; padding: 12px; }
             QProgressBar { background: #eef0f3; border: none; border-radius: 4px; }
             QProgressBar::chunk { background: #2f6fdb; border-radius: 4px; }
             QTableWidget { border: 1px solid #d7dbe1; gridline-color: #e6e9ed; }
