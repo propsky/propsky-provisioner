@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>出廠設定工具 介面草圖</title>
+<style>
+:root{
+  --bg:#e6e9ed; --win:#ffffff; --ink:#1b1f24; --mute:#6b7380; --line:#d7dbe1; --soft:#f4f5f7;
+  --idle:#9aa3ae; --run:#2f6fdb; --wait:#e0a100; --pass:#1f9d55; --fail:#d93a3a;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.4 "Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,sans-serif;padding-block:20px;padding-inline:16px}
+.cap{max-width:1024px;margin:0 auto 8px;color:var(--mute);font-size:12px}
+.scroller{overflow-x:auto}
+/* 固定 1024×768 */
+.window{width:1024px;height:768px;margin:0 auto;background:var(--win);border:1px solid #b9c0c9;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.1)}
+.titlebar{height:28px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--soft);border-bottom:1px solid var(--line);font-size:12px;color:var(--mute)}
+.titlebar b{color:var(--ink)} .titlebar .sp{flex:1}
+.titlebar .w{width:11px;height:11px;border-radius:50%;background:#cfd4da}
+
+/* 開工設定列 */
+.setup{height:44px;flex:none;display:flex;align-items:center;gap:14px;padding:0 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.field{display:flex;align-items:center;gap:6px}
+.field label{color:var(--mute);font-size:12px}
+.input{border:1px solid var(--line);border-radius:5px;padding:3px 8px;font-family:var(--mono);font-size:14px;background:#fff}
+.btn{border:1px solid var(--line);background:var(--soft);border-radius:5px;padding:3px 8px;font:inherit;font-size:12px;cursor:pointer}
+.ready{font-size:12px;color:var(--mute)} .ready b{color:var(--pass)}
+.stats{margin-left:auto;display:flex;gap:10px;font-size:12px}
+.stats b{font-size:18px;font-family:var(--mono)}
+
+/* 分頁 */
+.tabs{height:34px;flex:none;display:flex;align-items:flex-end;gap:2px;padding:0 10px;background:var(--soft);border-bottom:1px solid var(--line)}
+.tab{height:28px;display:flex;align-items:center;gap:6px;padding:0 14px;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font:inherit;font-size:13px;color:var(--mute);background:none;cursor:pointer;position:relative;top:1px}
+.tab[aria-selected="true"]{background:#fff;border-color:var(--line);color:var(--ink);font-weight:700}
+.tab .dot{width:8px;height:8px;border-radius:50%}
+.tab .sep{width:1px;height:16px;background:var(--line);margin:0 4px}
+.page{flex:1;min-height:0}
+
+/* 燒錄頁：2×2 */
+.grid{height:100%;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:10px;padding:10px}
+.slot{border:3px solid var(--c);border-radius:8px;display:flex;flex-direction:column;min-height:0;background:#fff}
+.slot.idle{--c:var(--idle)} .slot.run{--c:var(--run)} .slot.wait{--c:var(--wait)} .slot.pass{--c:var(--pass)} .slot.fail{--c:var(--fail)}
+.shead{height:28px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--c);color:#fff;font-weight:700;font-size:13px}
+.shead .port{font-family:var(--mono);font-weight:400;opacity:.9}
+.psel{font:12px var(--mono);color:var(--ink);background:#fff;border:none;border-radius:4px;padding:1px 4px;height:20px;max-width:210px}
+.psel:disabled{background:rgba(255,255,255,.35);color:#fff;opacity:1}
+.ibtn{height:20px;border:none;border-radius:4px;background:rgba(255,255,255,.3);color:#fff;font:12px inherit;padding:0 6px;cursor:pointer}
+.lock{font-size:11px;font-weight:400;opacity:.85}
+.shead .state{margin-left:auto;background:rgba(255,255,255,.22);padding:0 8px;border-radius:10px;font-size:12px}
+.sbody{flex:1;min-height:0;display:flex;flex-direction:column;gap:7px;padding:8px 10px;overflow:hidden}
+.idrow{display:flex;align-items:center;gap:14px}
+.card{font-family:var(--mono);font-size:56px;font-weight:800;line-height:1}
+.card.dim{color:#c5cbd3}
+.meta{font-family:var(--mono);font-size:12px;color:var(--mute);line-height:1.35}
+.meta b{color:var(--ink);font-weight:600}
+.steps{display:grid;grid-template-columns:repeat(9,1fr);gap:2px}
+.step{font-size:12px;text-align:center;padding:3px 0;border-radius:3px;background:#eef0f3;color:var(--mute);white-space:nowrap}
+.step.done{background:#dcf2e5;color:#17693b}
+.step.now{background:var(--c);color:#fff;font-weight:700}
+.step.bad{background:var(--fail);color:#fff;font-weight:700}
+.now-text{font-size:13px}
+.bar{height:7px;background:#eef0f3;border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--run)}
+.checks{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px}
+.checks .y{color:var(--pass)} .checks .p{color:var(--mute)}
+.prompt{background:#fff8e1;border:1px dashed var(--wait);border-radius:6px;padding:6px;text-align:center;font-size:13px}
+.big{font-size:32px;font-weight:900;letter-spacing:4px;text-align:center;color:var(--c);line-height:1}
+.reason{background:#fdecec;border-left:4px solid var(--fail);padding:5px 8px;font-size:12px}
+.reason code{font-family:var(--mono);font-size:11px;display:block;color:#7a2020}
+.sfoot{flex:none;display:flex;gap:6px;padding:7px 10px;border-top:1px solid var(--line);align-items:center}
+.act{flex:1;height:38px;border:none;border-radius:6px;font:inherit;font-size:16px;font-weight:800;color:#fff;cursor:pointer}
+.act.go{background:var(--run)} .act.yes{background:var(--pass)} .act.no{background:var(--fail);flex:.45} .act.gray{background:#c5cbd3;cursor:default}
+kbd{font-family:var(--mono);font-size:11px;background:rgba(255,255,255,.25);border-radius:3px;padding:0 4px;margin-left:5px;font-weight:400}
+.loglink{font-size:12px;color:var(--run);background:none;border:none;cursor:pointer;padding:0 4px}
+
+/* 紀錄頁 */
+.rec{height:100%;display:flex;flex-direction:column;padding:10px;gap:8px}
+.rec-bar{display:flex;gap:8px;align-items:center}
+.rec-bar .sum{margin-left:auto;color:var(--mute);font-size:12px}
+.tbl{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{background:var(--soft);color:var(--mute);font-weight:600;position:sticky;top:0}
+td.m{font-family:var(--mono)}
+.pill{font-weight:700;padding:0 6px;border-radius:3px;color:#fff;font-size:11px}
+.pill.p{background:var(--pass)} .pill.f{background:var(--fail)}
+
+/* Log 頁 */
+.logpage{height:100%;display:flex;flex-direction:column;padding:10px;gap:8px}
+.log-bar{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--mute)}
+.log-bar b{color:var(--ink)}
+.log-bar .r{margin-left:auto;display:flex;gap:6px}
+.term{flex:1;min-height:0;overflow:auto;background:#15181c;color:#c9d1d9;border-radius:6px;padding:8px 10px;font:12px/1.5 var(--mono);white-space:pre}
+.term .sys{color:#7aa2f7} .term .hit{color:#3fb950;font-weight:700} .term .dim{color:#6e7681} .term .err{color:#f85149;font-weight:700}
+
+.notes{max-width:1024px;margin:12px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
+.note{background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:12px}
+.note b{display:block}
+</style>
+</head>
+<body>
+
+<div class="cap">介面草圖 · 固定 1024×768 · 上方分頁可以點</div>
+<div class="scroller">
+<div class="window">
+  <div class="titlebar"><b>Propsky 出廠設定工具</b> v1.0 · SmartPay 投幣板<span class="sp"></span><span class="w"></span><span class="w"></span><span class="w"></span></div>
+
+  <div class="setup">
+    <div class="field"><label>起始編號</label><span class="input">F361</span><label>下一號</label><b style="font-family:var(--mono);font-size:15px">F366</b></div>
+    <div class="field"><label>WiFi</label><span class="input">propsky</span><span class="input">••••••</span><button class="btn">載入 wifi.dat</button></div>
+    <div class="ready"><b>✓</b> 韌體 v1.29.0　<b>✓</b> 上傳 8 檔　<b>✓</b> 帳本</div>
+    <div class="stats"><span>PASS <b style="color:var(--pass)">4</b></span><span>FAIL <b style="color:var(--fail)">1</b></span></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-p="burn">燒錄</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="rec">今日紀錄</button>
+    <span class="tab sep" style="padding:0;cursor:default"><span class="sep"></span></span>
+    <button class="tab" role="tab" aria-selected="false" data-p="log" data-port="1"><span class="dot" style="background:var(--idle)"></span>Log 1 · COM3</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="log" data-port="2"><span class="dot" style="background:var(--run)"></span>Log 2 · COM4</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="log" data-port="3"><span class="dot" style="background:var(--wait)"></span>Log 3 · COM5</button>
+    <button class="tab" role="tab" aria-selected="false" data-p="log" data-port="4"><span class="dot" style="background:var(--fail)"></span>Log 4 · COM6</button>
+  </div>
+
+  <!-- 燒錄 -->
+  <div class="page" id="p-burn">
+    <div class="grid">
+      <div class="slot idle">
+        <div class="shead">燒錄器 1 <select class="psel" id="sel1" title="選擇這一格的 COM port"><option selected>COM3 · CH340</option><option disabled>COM4 · CH340（燒錄器 2 使用中）</option><option disabled>COM5 · CH340（燒錄器 3 使用中）</option><option disabled>COM6 · CP2102（燒錄器 4 使用中）</option><option>未使用</option></select><button class="ibtn" title="重新掃描 COM port">⟳</button><button class="ibtn" title="讓這個燒錄器的 TX 燈閃爍，確認是哪一台">識別</button><span class="state">待機</span></div>
+        <div class="sbody">
+          <div class="idrow"><div class="card dim">––––</div><div class="meta">MAC<br><b>–</b></div></div>
+          <div class="steps"><div class="step">連線</div><div class="step">韌體</div><div class="step">MAC</div><div class="step">清空</div><div class="step">上傳</div><div class="step">驗證</div><div class="step">帳本</div><div class="step">開機</div><div class="step">LCD</div></div>
+          <div class="now-text" style="color:var(--mute)">換上新板後按「開始」</div>
+        </div>
+        <div class="sfoot"><button class="act go">開始<kbd>F1</kbd></button><button class="loglink" data-go="1">Log ›</button></div>
+      </div>
+
+      <div class="slot run">
+        <div class="shead">燒錄器 2 <select class="psel" disabled title="待機時才能切換"><option>COM4</option></select><span class="lock">🔒</span><span class="state">執行中 0:18</span></div>
+        <div class="sbody">
+          <div class="idrow"><div class="card dim" style="font-size:36px">待配號</div><div class="meta">MAC<br><b>E831CD246F10</b><br>新板</div></div>
+          <div class="steps"><div class="step done">連線</div><div class="step done">韌體</div><div class="step done">MAC</div><div class="step done">清空</div><div class="step now">上傳</div><div class="step">驗證</div><div class="step">帳本</div><div class="step">開機</div><div class="step">LCD</div></div>
+          <div class="now-text">上傳 analogCoinPay_Main.py（5 / 10）</div>
+          <div class="bar"><i style="width:58%"></i></div>
+        </div>
+        <div class="sfoot"><button class="act gray">執行中…</button><button class="loglink" data-go="2">Log ›</button></div>
+      </div>
+
+      <div class="slot wait">
+        <div class="shead">燒錄器 3 <select class="psel" disabled title="待機時才能切換"><option>COM5</option></select><span class="lock">🔒</span><span class="state">請確認</span></div>
+        <div class="sbody">
+          <div class="idrow"><div class="card">F364</div><div class="meta">MAC<br><b>9454C5536768</b><br>SP3_V0.31a · -50 dBm</div></div>
+          <div class="steps"><div class="step done">連線</div><div class="step done">韌體</div><div class="step done">MAC</div><div class="step done">清空</div><div class="step done">上傳</div><div class="step done">驗證</div><div class="step done">帳本</div><div class="step done">開機</div><div class="step now">LCD</div></div>
+          <div class="checks"><span class="y">✓ token 一致</span><span class="y">✓ MAC 一致</span><span class="y">✓ ESP Wi-Fi OK</span><span class="p">… MQTT 等待中</span></div>
+          <div class="prompt">① 把 <b>F364</b> 寫在板子上　② 看 LCD 正常<br><span style="font-size:12px;color:var(--mute)">LCD 不正常：直接換一塊 LCD，按「重開機」再看一次</span></div>
+        </div>
+        <div class="sfoot"><button class="act yes">完成，可拔板<kbd>F3</kbd></button><button class="act no" style="background:#fff;color:var(--ink);border:2px solid var(--line);font-size:14px">重開機</button><button class="loglink" data-go="3">Log ›</button></div>
+      </div>
+
+      <div class="slot fail">
+        <div class="shead">燒錄器 4 <select class="psel" disabled title="待機時才能切換"><option>COM6</option></select><span class="lock">🔒</span><span class="state">失敗</span></div>
+        <div class="sbody">
+          <div class="idrow"><div class="card">F365</div><div class="meta">MAC<br><b>94B555835EDC</b><br>已綁定，重試沿用此編號</div></div>
+          <div class="steps"><div class="step done">連線</div><div class="step done">韌體</div><div class="step done">MAC</div><div class="step done">清空</div><div class="step done">上傳</div><div class="step done">驗證</div><div class="step done">帳本</div><div class="step bad">開機</div><div class="step">LCD</div></div>
+          <div class="big">FAIL</div>
+          <div class="reason">60 秒內沒有 ESP Wi-Fi OK，請檢查 WiFi 或天線<code>最後一行：嘗試連線中... 10/10</code></div>
+        </div>
+        <div class="sfoot"><button class="act go">重試<kbd>F4</kbd></button><button class="loglink" data-go="4">Log ›</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 今日紀錄 -->
+  <div class="page" id="p-rec" hidden>
+    <div class="rec">
+      <div class="rec-bar"><button class="btn">開啟帳本</button><button class="btn">開啟 CSV</button><span class="sum">今日 5 片 · PASS 4 · FAIL 1 · 同步寫入 provision_log.csv / 出廠帳本.xlsx</span></div>
+      <div class="tbl">
+        <table>
+          <tr><th>時間</th><th>小卡編號</th><th>MAC</th><th>UUID (token)</th><th>Port</th><th>程式版本</th><th>RSSI</th><th>MQTT</th><th>結果</th><th>備註</th></tr>
+          <tr><td>14:32</td><td class="m">F363</td><td class="m">E831CD245274</td><td class="m">27a03c89-9256-43ed-…</td><td>COM3</td><td>SP3_V0.31a</td><td>-52</td><td>OK</td><td><span class="pill p">PASS</span></td><td></td></tr>
+          <tr><td>14:31</td><td class="m">F362</td><td class="m">94B555834994</td><td class="m">ea66cb88-0ede-4999-…</td><td>COM4</td><td>SP3_V0.31a</td><td>-61</td><td>OK</td><td><span class="pill p">PASS</span></td><td>重燒韌體</td></tr>
+          <tr><td>14:29</td><td class="m">F357</td><td class="m">E831CD246D50</td><td class="m">08e75cb0-277e-4820-…</td><td>COM3</td><td>SP3_V0.31a</td><td>-49</td><td>未確認</td><td><span class="pill p">PASS</span></td><td>重燒，沿用舊 token</td></tr>
+          <tr><td>14:28</td><td class="m">F361</td><td class="m">E831CD261CF0</td><td class="m">463ff934-4ff9-4f88-…</td><td>COM6</td><td>SP3_V0.31a</td><td>-58</td><td>OK</td><td><span class="pill p">PASS</span></td><td></td></tr>
+          <tr><td>14:26</td><td class="m">–</td><td class="m">E831CDAADA64</td><td class="m">–</td><td>COM5</td><td>–</td><td>–</td><td>–</td><td><span class="pill f">FAIL</span></td><td>上傳驗證失敗，未配號</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="page" id="p-log" hidden>
+    <div class="logpage">
+      <div class="log-bar"><span id="log-title"><b>Log 3 · COM5</b>　F364 · 9454C5536768</span><span class="r"><label><input type="checkbox" checked> 自動捲動</label><button class="btn">複製</button><button class="btn">開啟 log 資料夾</button></span></div>
+      <div class="term" id="term"></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="notes">
+  <div class="note"><b>分頁：燒錄／今日紀錄／Log 1～4</b>主畫面只放 4 格，紀錄和 log 各自一頁。</div>
+  <div class="note"><b>Log 分頁的圓點 = 該格狀態</b>在別的分頁也看得到哪一格在等人。格子右下「Log ›」直接跳到那格的 log。</div>
+  <div class="note"><b>每格自選 COM port</b>待機時才能切換；已被其他格用的 port 會反灰；選「未使用」可關掉這格。⟳ 重新掃描，「識別」讓該燒錄器 TX 燈閃，確認實體是哪一台。設定存進 config.ini，下次開啟自動帶入。</div>
+  <div class="note"><b>Log 裡的關鍵行會上色</b>程式動作藍色、驗收通過綠色、錯誤紅色，一眼看出卡在哪。</div>
+</div>
+
+<script>
+const logs = {
+ 1: [['dim','（待機中，尚無資料）']],
+ 2: [['sys','[14:33:02] 開啟 COM4，進入 raw REPL ... OK'],['sys','[14:33:03] os.uname(): v1.29.0 on 2026-08-24 → 版本正確，略過燒韌體'],['sys','[14:33:03] MAC = E831CD246F10（帳本中無此 MAC → 新板）'],['sys','[14:33:04] 清空檔案系統（保留 boot.py），刪除 11 個檔案'],['sys','[14:33:05] 上傳 BN165DKBDriver.py ... 4.2 KB  sha256 ✓'],['sys','[14:33:06] 上傳 mach_meter.py ... 3.1 KB  sha256 ✓'],['sys','[14:33:07] 上傳 ntptime.py ... 1.4 KB  sha256 ✓'],['sys','[14:33:08] 上傳 rgb_led_manager.py ... 5.6 KB  sha256 ✓'],['sys','[14:33:10] 上傳 analogCoinPay_Main.py ... 58%']],
+ 3: [['sys','[14:31:40] 開啟 COM5，進入 raw REPL ... OK'],['sys','[14:31:41] os.uname(): v1.29.0 on 2026-08-24 → 版本正確'],['sys','[14:31:41] MAC = 9454C5536768（新板）'],['sys','[14:31:58] 上傳 10 個檔案完成，sha256 全部一致'],['sys','[14:31:58] 配號 F364，寫入帳本 ✓'],['sys','[14:31:59] machine.reset()，等待開機驗收（逾時 60 秒）'],['','RGB LED 初始化完成, pin=27, num=1, brightness=25'],['','讀取 Wi-Fi 設定: SSID=propsky'],['','嘗試連線中... 1/10'],['','嘗試連線中... 2/10'],['','Wi-Fi 連線成功！'],['','WiFi Signal Strength: -50 dBm'],['hit','ESP Wi-Fi OK                                   ← 驗收：WiFi ✓'],['','執行analogCoinPay_Main.py...'],['','開始執行 analogCoinPay_Main.py初始化，版本為: SP3_V0.31a'],['hit','Get token: 7289398a-cefb-45a8-aea6-d9630bb44bee  ← 驗收：token 一致 ✓'],['hit','My MAC Address: 9454C5536768                   ← 驗收：MAC 一致 ✓'],['','Action: WiFi is OK, MainStatus: NONE_INTERNET'],['sys','[14:32:25] 自動驗收通過，等待人工確認 LCD'],['dim','（背景持續讀取，等待 MainStatus: STANDBY_MQTT ...）']],
+ 4: [['sys','[14:30:10] 開啟 COM6，進入 raw REPL ... OK'],['sys','[14:30:11] MAC = 94B555835EDC（新板）'],['sys','[14:30:27] 上傳完成，sha256 全部一致'],['sys','[14:30:27] 配號 F365，寫入帳本 ✓'],['sys','[14:30:28] machine.reset()，等待開機驗收（逾時 60 秒）'],['','讀取 Wi-Fi 設定: SSID=propsky'],['','嘗試連線 Wi-Fi propsky ...'],['','嘗試連線中... 1/10'],['','嘗試連線中... 2/10'],['','嘗試連線中... 9/10'],['','嘗試連線中... 10/10'],['err','[14:31:28] FAIL：60 秒內沒有 ESP Wi-Fi OK']]
+};
+const meta = {1:'待機',2:'待配號 · E831CD246F10',3:'F364 · 9454C5536768',4:'F365 · 94B555835EDC'};
+const tabs = document.querySelectorAll('.tab[data-p]');
+function show(p, port){
+  tabs.forEach(t => t.setAttribute('aria-selected', String(t.dataset.p===p && (p!=='log' || t.dataset.port===String(port)))));
+  ['burn','rec','log'].forEach(id => document.getElementById('p-'+id).hidden = id!==p);
+  if(p==='log'){
+    const com = {1:'COM3',2:'COM4',3:'COM5',4:'COM6'}[port];
+    document.getElementById('log-title').innerHTML = `<b>Log ${port} · ${com}</b>　${meta[port]}`;
+    const term = document.getElementById('term'); term.innerHTML='';
+    logs[port].forEach(([c,t]) => { const s=document.createElement('div'); if(c) s.className=c; s.textContent=t; term.appendChild(s); });
+  }
+}
+document.getElementById('sel1').addEventListener('change', e => {
+  const v = e.target.value.split(' ')[0];
+  const t = document.querySelector('.tab[data-port="1"]');
+  t.lastChild.textContent = v==='未使用' ? 'Log 1 · 未使用' : 'Log 1 · ' + v;
+  document.querySelector('.slot.idle').style.opacity = v==='未使用' ? .45 : 1;
+});
+tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.p, t.dataset.port)));
+document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => show('log', b.dataset.go)));
+</script>
+</body>
+</html>

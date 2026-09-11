@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "propsky-provisioner"
+version = "0.1.0"
+description = "SmartPay ESP32 factory provisioning tool"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "PySide6>=6.7,<7",
+    "esptool>=5,<6",
+    "openpyxl>=3.1,<4",
+    "pyserial>=3.5,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+provisioner = "provisioner.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

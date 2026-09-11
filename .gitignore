@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+config.ini
+firmware/
+payload/
+logs/
+provision_log.csv
+出廠帳本.xlsx
+出廠帳本.backup-*.xlsx
