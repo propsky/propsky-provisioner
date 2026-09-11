@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -48,9 +48,11 @@ class RawReplClient:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout, write_timeout=3)
+                self.serial = serial.Serial(None, self.baudrate, timeout=self.timeout, write_timeout=3)
                 self.serial.dtr = False
                 self.serial.rts = False
+                self.serial.port = self.port
+                self.serial.open()
                 time.sleep(0.2)
                 self.serial.reset_input_buffer()
                 self._enter_raw_repl()
@@ -59,6 +61,7 @@ class RawReplClient:
             except (ProvisionError, serial.SerialException) as exc:
                 last_error = exc
                 if self.serial and self.serial.is_open:
+                    self.serial.rts = False
                     self.serial.dtr = True
                     time.sleep(0.15)
                     self.serial.close()
@@ -112,9 +115,8 @@ class RawReplClient:
         assert self.serial
         self.serial.write(b"\x03\x03\x01")
         self.serial.flush()
-        output = self._read_until(b">", 3)
-        if b"raw REPL" not in output and b"raw repl" not in output.lower():
-            raise ProvisionError("無法進入 raw REPL")
+        self._read_until(b"raw REPL", 3)
+        self._read_until(b">", 1)
 
     def _read_until(self, marker: bytes, timeout: float) -> bytes:
         assert self.serial
@@ -170,7 +172,8 @@ class EsptoolRunner:
     @staticmethod
     def _command_prefix() -> list[str]:
         if getattr(sys, "frozen", False):
-            executable = shutil.which("esptool.exe") or shutil.which("esptool")
+            adjacent = Path(sys.executable).with_name("esptool.exe")
+            executable = str(adjacent) if adjacent.exists() else shutil.which("esptool.exe") or shutil.which("esptool")
             if executable:
                 return [executable]
             raise ProvisionError("找不到凍結版所需的 esptool.exe")
@@ -219,7 +222,17 @@ class ProvisionService:
                 return self.run(port, card_number, ssid, wifi_password, firmware, allocate_card, True)
             with client:
                 firmware_version = self._read_firmware(client)
-                if firmware_version and (firmware.version not in firmware_version or firmware.date not in firmware_version):
+                reported_date = re.search(r"\b20\d{6}\b", firmware_version or "")
+                firmware_mismatch = bool(
+                    firmware_version
+                    and (
+                        firmware.version not in firmware_version
+                        or (reported_date and reported_date.group(0) != firmware.date)
+                    )
+                )
+                if firmware_mismatch:
+                    if firmware_version and not reported_date:
+                        self.log("韌體未提供日期，只比對版本")
                     self.log("韌體版本不符，執行 erase-flash + write-flash")
                     if _reflash_attempt:
                         raise ProvisionError("韌體重燒後版本仍不符")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import serial
@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -34,7 +34,7 @@ from .firmware import FirmwareInfo, discover_firmware
 from .ledger import Ledger
 from .models import LEDGER_HEADERS, ProvisionStep, SlotSnapshot, SlotState, STEPS
 from .numbering import next_card_number, validate_card_number
-from .provisioning import ProvisionError, ProvisionService, available_ports
+from .provisioning import ProvisionService, available_ports
 
 
 class WorkerSignals(QObject):
@@ -92,6 +92,7 @@ class SlotCard(QWidget):
         self.slot = slot
         self.snapshot = SlotSnapshot(slot=slot)
         self.setObjectName("slotCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setMinimumHeight(300)
         self.port_combo = QComboBox()
         self.port_combo.setMinimumWidth(170)
@@ -100,6 +101,10 @@ class SlotCard(QWidget):
         self.state_label = QLabel("待機")
         self.card_label = QLabel("----")
         self.card_label.setObjectName("cardNumber")
+        self.status_big_label = QLabel("")
+        self.status_big_label.setObjectName("bigStatus")
+        self.status_big_label.setAlignment(Qt.AlignCenter)
+        self.status_big_label.hide()
         self.mac_label = QLabel("MAC\n-")
         self.steps_label = QLabel("　".join(step.value for step in STEPS))
         self.steps_label.setObjectName("steps")
@@ -145,6 +150,7 @@ class SlotCard(QWidget):
         body.setContentsMargins(10, 8, 10, 8)
         body.addLayout(header)
         body.addLayout(identity)
+        body.addWidget(self.status_big_label)
         body.addWidget(self.steps_label)
         body.addWidget(self.message_label)
         body.addWidget(self.progress)
@@ -171,13 +177,18 @@ class SlotCard(QWidget):
             self.message_label.setText("請先選擇 COM port")
             return
         try:
-            with serial.Serial(port, 115200, timeout=0.2, write_timeout=1) as connection:
-                connection.dtr = False
-                connection.rts = False
+            connection = serial.Serial(None, 115200, timeout=0.2, write_timeout=1)
+            connection.dtr = False
+            connection.rts = False
+            connection.port = port
+            connection.open()
+            try:
                 for _ in range(3):
-                    connection.write(b"\x03")
+                    connection.write(b"\x00")
                     connection.flush()
                     time.sleep(0.05)
+            finally:
+                connection.close()
             self.message_label.setText(f"已識別 {port}，TX 指示燈應已閃爍")
         except serial.SerialException as exc:
             self.message_label.setText(f"識別失敗：{exc}")
@@ -190,6 +201,13 @@ class SlotCard(QWidget):
         self.message_label.setText(snapshot.message)
         self.progress.setValue(snapshot.progress)
         self.check_label.setText("　".join(f"✓ {item}" for item in snapshot.checks))
+        self.steps_label.setText(self._steps_html(snapshot))
+        if snapshot.state in {SlotState.PASS, SlotState.FAIL}:
+            self.status_big_label.setText(snapshot.state.value.upper())
+            self.status_big_label.setStyleSheet(f"color: {self._state_color(snapshot.state)};")
+            self.status_big_label.show()
+        else:
+            self.status_big_label.hide()
         self.prompt_label.setText(
             f"請把 {snapshot.card_number} 寫在板子上，確認 LCD 正常後按「完成」"
             if snapshot.state == SlotState.WAITING and snapshot.card_number
@@ -204,6 +222,18 @@ class SlotCard(QWidget):
         self.complete_button.setVisible(waiting)
         self.retry_button.setVisible(waiting)
         self.setStyleSheet(f"QWidget#slotCard {{ border: 3px solid {self._state_color(snapshot.state)}; }}")
+
+    @staticmethod
+    def _steps_html(snapshot: SlotSnapshot) -> str:
+        parts = []
+        for step in STEPS:
+            color = "#1f9d55" if step in snapshot.completed_steps else "#6b7380"
+            if step == snapshot.step and snapshot.state == SlotState.RUNNING:
+                color = "#2f6fdb"
+            if step == snapshot.step and snapshot.state == SlotState.FAIL:
+                color = "#d93a3a"
+            parts.append(f'<span style="color:{color};">{step.value}</span>')
+        return "　".join(parts)
 
     def reset(self) -> None:
         self.set_snapshot(SlotSnapshot(slot=self.slot, port=self.port_combo.currentText()))
@@ -242,7 +272,8 @@ class MainWindow(QMainWindow):
         self.ledger.backup()
         self.thread_pool = QThreadPool.globalInstance()
         self.workers: dict[int, ProvisionWorker] = {}
-        self.log_views: list[QLabel] = []
+        self.log_views: list[QPlainTextEdit] = []
+        self.log_paths: dict[int, Path] = {}
         self.cards: list[SlotCard] = []
         self._build_ui()
         self._refresh_ports()
@@ -316,15 +347,12 @@ class MainWindow(QMainWindow):
         open_csv.clicked.connect(lambda: self._open_path(self.ledger.csv_path))
 
         for index in range(4):
-            view = QLabel("（待機中，尚無資料）")
+            view = QPlainTextEdit("（待機中，尚無資料）")
             view.setObjectName("terminal")
-            view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            view.setReadOnly(True)
             view.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(view)
             self.log_views.append(view)
-            self.tabs.addTab(scroll, f"Log {index + 1}")
+            self.tabs.addTab(view, f"Log {index + 1}")
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -390,6 +418,7 @@ class MainWindow(QMainWindow):
         snapshot.state = SlotState.RUNNING
         snapshot.message = "正在連線..."
         snapshot.logs.clear()
+        self._start_log(slot, port)
         self.cards[index].set_snapshot(snapshot)
         worker = ProvisionWorker(slot, self.root, port, None, self.ssid.text(), self.password.text(), firmware, self.ledger, self._allocate_card)
         worker.signals.log.connect(self._on_log)
@@ -410,12 +439,20 @@ class MainWindow(QMainWindow):
         value = self.first_card.text().strip()
         if self.cards_used == 0 and validate_card_number(value):
             self.next_card = value
+        elif self.cards_used > 0 and value != self.next_card:
+            QMessageBox.information(self, "編號已鎖定", "今日已開始配號，新的起始編號將於明日生效")
         self._save_settings()
 
     def _on_log(self, slot: int, message: str) -> None:
         snapshot = self.snapshots[slot - 1]
         snapshot.logs.append(message)
-        self.log_views[slot - 1].setText("\n".join(snapshot.logs))
+        view = self.log_views[slot - 1]
+        view.appendPlainText(message)
+        view.ensureCursorVisible()
+        path = self.log_paths.get(slot)
+        if path:
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(message + "\n")
 
     def _on_step(self, slot: int, step: str, progress: int, message: str) -> None:
         snapshot = self.snapshots[slot - 1]
@@ -427,6 +464,7 @@ class MainWindow(QMainWindow):
             match = message.split("=", 1)
             if len(match) == 2:
                 snapshot.mac = match[1].strip()
+                self._rename_log(slot, snapshot.mac)
         if snapshot.step == ProvisionStep.LEDGER and message.startswith("配號"):
             snapshot.card_number = message.split(" ", 1)[1].split("，", 1)[0]
         self.cards[slot - 1].set_snapshot(snapshot)
@@ -439,6 +477,7 @@ class MainWindow(QMainWindow):
         snapshot.state = SlotState.WAITING
         snapshot.message = "驗收通過，請確認 LCD"
         snapshot.checks = ["token 一致", "MAC 一致", "ESP Wi-Fi OK"]
+        self._write_log_result(slot, "PASS - 等待人工 LCD 確認")
         self.cards[slot - 1].set_snapshot(snapshot)
         self._refresh_records()
 
@@ -474,6 +513,7 @@ class MainWindow(QMainWindow):
         snapshot.state = SlotState.FAIL
         snapshot.error = error
         snapshot.message = "FAIL"
+        self._write_log_result(slot, f"FAIL - {error}")
         if snapshot.mac:
             try:
                 self.ledger.update_result(snapshot.mac, "FAIL", error)
@@ -508,6 +548,31 @@ class MainWindow(QMainWindow):
         self.config = AppConfig(first, self.ssid.text(), self.password.text(), [card.port_combo.currentText() for card in self.cards])
         save_config(self.config_path, self.config)
 
+    def _start_log(self, slot: int, port: str) -> None:
+        logs = self.root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        safe_port = port.replace("/", "_").replace("\\", "_")
+        path = logs / f"{datetime.now():%Y%m%d-%H%M%S}_{safe_port}_pending.log"
+        path.write_text(f"START {port}\n", encoding="utf-8")
+        self.log_paths[slot] = path
+        self.log_views[slot - 1].clear()
+        self.log_views[slot - 1].appendPlainText(f"START {port}")
+
+    def _rename_log(self, slot: int, identity: str) -> None:
+        path = self.log_paths.get(slot)
+        if not path or "_pending.log" not in path.name:
+            return
+        safe_identity = identity.replace("/", "_").replace("\\", "_")
+        renamed = path.with_name(path.name.replace("_pending.log", f"_{safe_identity}.log"))
+        path.rename(renamed)
+        self.log_paths[slot] = renamed
+
+    def _write_log_result(self, slot: int, result: str) -> None:
+        path = self.log_paths.get(slot)
+        if path:
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(result + "\n")
+
     @staticmethod
     def _open_path(path: Path) -> None:
         if path.exists():
@@ -537,7 +602,8 @@ class MainWindow(QMainWindow):
             QTabBar::tab { padding: 8px 16px; background: #f4f5f7; border: 1px solid transparent; }
             QTabBar::tab:selected { background: white; border-color: #cbd1d8; border-bottom-color: white; }
             QWidget#slotCard { background: white; border-radius: 8px; }
-            QLabel#cardNumber { font-family: Consolas, monospace; font-size: 42px; font-weight: 800; min-width: 170px; }
+             QLabel#cardNumber { font-family: Consolas, monospace; font-size: 42px; font-weight: 800; min-width: 170px; }
+             QLabel#bigStatus { font-size: 32px; font-weight: 800; }
             QLabel#steps { background: #eef0f3; border-radius: 3px; padding: 5px; color: #6b7380; }
             QLabel#prompt { background: #fff8e1; border: 1px dashed #e0a100; border-radius: 5px; padding: 7px; }
             QLabel#terminal { background: #15181c; color: #c9d1d9; font-family: Consolas, monospace; padding: 12px; }

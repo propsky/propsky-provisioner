@@ -38,25 +38,46 @@ class Ledger:
             return rows
 
     def duplicate_fields(self) -> list[str]:
-        """Return identity columns containing duplicates in the active ledger."""
-        rows = self.existing_records()
-        if not rows and self.xlsx_path.exists():
-            workbook = load_workbook(self.xlsx_path, read_only=True, data_only=True)
-            try:
-                sheet = workbook.active
-                headers = [str(cell.value or "") for cell in sheet[1]]
-                rows = [
-                    {header: str(values[index] or "") for index, header in enumerate(headers) if header}
-                    for values in sheet.iter_rows(min_row=2, values_only=True)
-                ]
-            finally:
-                workbook.close()
-        duplicates = []
-        for field in ("MAC Address (CPUID)", "UUID (token)", "小卡編號"):
-            values = [row.get(field, "").strip().upper() for row in rows if row.get(field, "").strip()]
-            if len(values) != len(set(values)):
-                duplicates.append(field)
-        return duplicates
+        """Return identity fields whose mappings conflict, not repeated history rows."""
+        with self._lock:
+            rows = self.existing_records()
+            if self.xlsx_path.exists():
+                workbook = load_workbook(self.xlsx_path, read_only=True, data_only=True)
+                try:
+                    sheet = workbook.active
+                    headers = [str(cell.value or "") for cell in sheet[1]]
+                    rows.extend(
+                        {
+                            header: str(values[index] or "")
+                            for index, header in enumerate(headers)
+                            if header and index < len(values)
+                        }
+                        for values in sheet.iter_rows(min_row=2, values_only=True)
+                    )
+                finally:
+                    workbook.close()
+
+            conflicts: list[str] = []
+            mac_mappings: dict[str, set[tuple[str, str]]] = {}
+            card_mappings: dict[str, set[str]] = {}
+            token_mappings: dict[str, set[str]] = {}
+            for row in rows:
+                mac = row.get("MAC Address (CPUID)", "").strip().upper()
+                card = row.get("小卡編號", "").strip().upper()
+                token = row.get("UUID (token)", "").strip().upper()
+                if mac:
+                    mac_mappings.setdefault(mac, set()).add((card, token))
+                if card and mac:
+                    card_mappings.setdefault(card, set()).add(mac)
+                if token and mac:
+                    token_mappings.setdefault(token, set()).add(mac)
+            if any(len(values) > 1 for values in mac_mappings.values()):
+                conflicts.append("MAC Address (CPUID)")
+            if any(len(values) > 1 for values in card_mappings.values()):
+                conflicts.append("小卡編號")
+            if any(len(values) > 1 for values in token_mappings.values()):
+                conflicts.append("UUID (token)")
+            return conflicts
 
     def find_by_mac(self, mac: str) -> dict[str, str] | None:
         with self._lock:
