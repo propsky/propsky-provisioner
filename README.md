@@ -35,6 +35,10 @@ python -m provisioner
 python -m pytest -q
 ```
 
+## 實機測試
+
+測試員請依照 [`docs/實機測試流程與檢核表.md`](docs/實機測試流程與檢核表.md) 執行單片、重燒、失敗恢復、四路並行與打包驗證，並使用文件內的問題回報模板回報結果。
+
 實機測試前，確認 USB-TTL 使用 CH340 或 CP210x，且不要讓 Thonny 佔用 COM port。GUI 會在開始前檢查 firmware 目錄、SSID 與 COM port。
 
 WiFi 密碼只留在本機 `config.ini` 記憶設定，不會寫入 CSV、XLSX 或 serial log。
