@@ -79,8 +79,7 @@ class RawReplClient:
         self.serial.write(source.encode("utf-8") + b"\x04")
         self.serial.flush()
         deadline = time.monotonic() + (timeout or self.timeout)
-        if self._read_exact(2, deadline) != b"OK":
-            raise ProvisionError("raw REPL 回應格式錯誤")
+        self._read_ok(deadline)
         stdout = self._read_until(b"\x04", max(0, deadline - time.monotonic()))[:-1]
         stderr = self._read_until(b"\x04", max(0, deadline - time.monotonic()))[:-1]
         self._read_exact(1, deadline)  # raw REPL prompt
@@ -93,11 +92,21 @@ class RawReplClient:
         self.execute("import ubinascii\n_f=open(%r,'wb')" % name)
         for offset in range(0, len(encoded), 1024):
             self.execute("_f.write(ubinascii.a2b_base64(%r))" % encoded[offset : offset + 1024])
+            self.execute("import gc; gc.collect()")
         self.execute("_f.close()")
 
     def sha256(self, name: str) -> str:
         output = self.execute(
-            "import hashlib\nprint(hashlib.sha256(open(%r,'rb').read()).hexdigest())" % name
+            "import hashlib,gc\n"
+            "gc.collect()\n"
+            "h=hashlib.sha256()\n"
+            "f=open(%r,'rb')\n"
+            "while True:\n"
+            " b=f.read(512)\n"
+            " if not b: break\n"
+            " h.update(b)\n"
+            "f.close()\n"
+            "print(h.hexdigest())" % name
         )
         matches = re.findall(r"[0-9a-f]{64}", output)
         if not matches:
@@ -117,6 +126,27 @@ class RawReplClient:
         self.serial.flush()
         self._read_until(b"raw REPL", 3)
         self._read_until(b">", 1)
+        time.sleep(0.2)
+        reset_input_buffer = getattr(self.serial, "reset_input_buffer", None)
+        if reset_input_buffer:
+            reset_input_buffer()
+        self._read_buffer.clear()
+
+    def _read_ok(self, deadline: float) -> None:
+        """Skip output left by the interrupted application before raw-REPL OK."""
+        received = bytearray()
+        while time.monotonic() < deadline:
+            available = getattr(self.serial, "in_waiting", 0)
+            chunk = self.serial.read(max(1, min(256, available)))
+            if chunk:
+                received.extend(chunk)
+                position = received.find(b"OK")
+                if position >= 0:
+                    self._read_buffer.extend(received[position + 2 :])
+                    return
+                continue
+        preview = bytes(received[-128:]).hex(" ") or "<無資料>"
+        raise ProvisionError(f"raw REPL 回應格式錯誤，收到 bytes: {preview}")
 
     def _read_until(self, marker: bytes, timeout: float) -> bytes:
         assert self.serial

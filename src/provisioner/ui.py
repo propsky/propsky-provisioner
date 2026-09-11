@@ -183,10 +183,11 @@ class SlotCard(QWidget):
             connection.port = port
             connection.open()
             try:
-                for _ in range(3):
-                    connection.write(b"\x00")
+                deadline = time.monotonic() + 2.5
+                while time.monotonic() < deadline:
+                    connection.write(b"\x00" * 32)
                     connection.flush()
-                    time.sleep(0.05)
+                    time.sleep(0.02)
             finally:
                 connection.close()
             self.message_label.setText(f"已識別 {port}，TX 指示燈應已閃爍")
@@ -292,7 +293,7 @@ class MainWindow(QMainWindow):
         self.ssid = QLineEdit(self.config.ssid)
         self.ssid.setMaximumWidth(130)
         self.password = QLineEdit(self.config.wifi_password)
-        self.password.setEchoMode(QLineEdit.Password)
+        self.password.setEchoMode(QLineEdit.Normal)
         self.password.setMaximumWidth(130)
         self.load_wifi = QPushButton("載入 wifi.dat")
         self.scan_button = QPushButton("重新掃描")

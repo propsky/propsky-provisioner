@@ -68,6 +68,39 @@ def test_raw_repl_consumes_complete_response_in_one_chunk() -> None:
     assert client._read_buffer == bytearray()
 
 
+def test_raw_repl_skips_stale_output_before_ok() -> None:
+    client = RawReplClient("FAKE", timeout=0.1)
+    client.serial = FakeSerial(b"old traceback\r\nOKhello\x04\x04>")  # type: ignore[assignment]
+
+    assert client.execute("print('hello')") == "hello"
+
+
+def test_raw_repl_reports_received_bytes_on_bad_response() -> None:
+    client = RawReplClient("FAKE", timeout=0.01)
+    client.serial = FakeSerial(b"not-ok")  # type: ignore[assignment]
+
+    try:
+        client.execute("print('hello')")
+    except Exception as exc:
+        assert "6e 6f 74 2d 6f 6b" in str(exc)
+    else:
+        raise AssertionError("expected raw REPL failure")
+
+
+def test_sha256_uses_chunked_reads() -> None:
+    client = RawReplClient("FAKE")
+    commands: list[str] = []
+
+    def execute(source: str, timeout: float | None = None) -> str:
+        commands.append(source)
+        return "a" * 64
+
+    client.execute = execute  # type: ignore[method-assign]
+    assert client.sha256("large.py") == "a" * 64
+    assert ".read()).hexdigest" not in commands[0]
+    assert "f.read(512)" in commands[0]
+
+
 def test_raw_repl_ignores_friendly_prompt_before_banner() -> None:
     client = RawReplClient("FAKE", timeout=0.1)
     fake = FakeSerial(b">>> raw REPL; CTRL-B to exit\r\n>")
