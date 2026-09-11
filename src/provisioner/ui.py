@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import threading
+import time
+from datetime import date
 from pathlib import Path
 
+import serial
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -54,6 +57,8 @@ class ProvisionWorker(QRunnable):
         self.ledger = ledger
         self.allocate_card = allocate_card
         self.retry = retry
+        self.token = None
+        self.mac = None
         self.signals = WorkerSignals()
 
     @Slot()
@@ -66,7 +71,7 @@ class ProvisionWorker(QRunnable):
         )
         try:
             if self.retry:
-                service.retry_boot(self.port)
+                service.retry_boot(self.port, self.token, self.mac)
                 self.signals.finished.emit(self.slot, None)
             else:
                 assert self.firmware is not None
@@ -161,7 +166,21 @@ class SlotCard(QWidget):
         self.port_combo.setCurrentIndex(max(0, index))
 
     def identify(self) -> None:
-        self.message_label.setText(f"已選擇 {self.port_combo.currentText()}，請確認該燒錄器 TX 指示燈")
+        port = self.port_combo.currentText()
+        if port == "未使用":
+            self.message_label.setText("請先選擇 COM port")
+            return
+        try:
+            with serial.Serial(port, 115200, timeout=0.2, write_timeout=1) as connection:
+                connection.dtr = False
+                connection.rts = False
+                for _ in range(3):
+                    connection.write(b"\x03")
+                    connection.flush()
+                    time.sleep(0.05)
+            self.message_label.setText(f"已識別 {port}，TX 指示燈應已閃爍")
+        except serial.SerialException as exc:
+            self.message_label.setText(f"識別失敗：{exc}")
 
     def set_snapshot(self, snapshot: SlotSnapshot) -> None:
         self.snapshot = snapshot
@@ -316,7 +335,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(content)
         self.load_wifi.clicked.connect(self._load_wifi)
         self.scan_button.clicked.connect(self._refresh_ports)
-        self.first_card.editingFinished.connect(self._save_settings)
+        self.first_card.editingFinished.connect(self._first_card_changed)
         self.ssid.editingFinished.connect(self._save_settings)
         self.password.editingFinished.connect(self._save_settings)
 
@@ -326,7 +345,9 @@ class MainWindow(QMainWindow):
             selected = self.config.ports[index] if self.config.ports[index] in ports else "未使用"
             card.set_ports(ports, selected)
             self.snapshots[index].port = selected
-        self.ready_label.setText(f"找到 {len(ports)} 個 COM port")
+        duplicate_fields = self.ledger.duplicate_fields()
+        suffix = f"；帳本重複：{', '.join(duplicate_fields)}" if duplicate_fields else ""
+        self.ready_label.setText(f"找到 {len(ports)} 個 COM port{suffix}")
 
     def _load_wifi(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "載入 wifi.dat", str(self.root), "wifi.dat (wifi.dat)")
@@ -351,6 +372,10 @@ class MainWindow(QMainWindow):
             return
         if not validate_card_number(self.first_card.text()):
             QMessageBox.warning(self, "編號格式錯誤", "小卡編號必須以數字結尾，例如 F361")
+            return
+        duplicate_fields = self.ledger.duplicate_fields()
+        if duplicate_fields:
+            QMessageBox.warning(self, "帳本資料重複", f"請先處理重複欄位：{', '.join(duplicate_fields)}")
             return
         if not self.ssid.text() or ";" in self.ssid.text():
             QMessageBox.warning(self, "WiFi 設定錯誤", "請輸入 SSID，且 SSID 不可含分號")
@@ -381,6 +406,12 @@ class MainWindow(QMainWindow):
             self.cards_used += 1
             return card
 
+    def _first_card_changed(self) -> None:
+        value = self.first_card.text().strip()
+        if self.cards_used == 0 and validate_card_number(value):
+            self.next_card = value
+        self._save_settings()
+
     def _on_log(self, slot: int, message: str) -> None:
         snapshot = self.snapshots[slot - 1]
         snapshot.logs.append(message)
@@ -402,6 +433,9 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, slot: int, record: object) -> None:
         snapshot = self.snapshots[slot - 1]
+        if record is not None:
+            snapshot.token = getattr(record, "token", None)
+            snapshot.mac = getattr(record, "mac", snapshot.mac)
         snapshot.state = SlotState.WAITING
         snapshot.message = "驗收通過，請確認 LCD"
         snapshot.checks = ["token 一致", "MAC 一致", "ESP Wi-Fi OK"]
@@ -417,6 +451,8 @@ class MainWindow(QMainWindow):
         snapshot.error = None
         self.cards[index].set_snapshot(snapshot)
         worker = ProvisionWorker(slot, self.root, port, snapshot.card_number, self.ssid.text(), self.password.text(), None, self.ledger, self._allocate_card, retry=True)
+        worker.token = snapshot.token
+        worker.mac = snapshot.mac
         worker.signals.log.connect(self._on_log)
         worker.signals.step.connect(self._on_step)
         worker.signals.finished.connect(self._on_finished)
@@ -450,7 +486,10 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(1 + slot)
 
     def _refresh_records(self) -> None:
-        rows = self.ledger.existing_records()
+        rows = [
+            row for row in self.ledger.existing_records()
+            if str(row.get("燒錄時間", ""))[:10] == date.today().isoformat()
+        ]
         self.records.setRowCount(len(rows))
         passed = failed = 0
         for row_index, row in enumerate(rows):

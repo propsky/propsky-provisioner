@@ -37,24 +37,47 @@ class Ledger:
                     rows.extend(dict(row) for row in csv.DictReader(stream))
             return rows
 
-    def find_by_mac(self, mac: str) -> dict[str, str] | None:
-        normalized = mac.upper()
+    def duplicate_fields(self) -> list[str]:
+        """Return identity columns containing duplicates in the active ledger."""
         rows = self.existing_records()
-        for row in reversed(rows):
-            if row.get("MAC Address (CPUID)", "").upper() == normalized:
-                return row
-        if not self.xlsx_path.exists():
-            return None
-        workbook = load_workbook(self.xlsx_path, read_only=True, data_only=True)
-        sheet = workbook.active
-        headers = [str(cell.value or "") for cell in sheet[1]]
-        for values in reversed(list(sheet.iter_rows(min_row=2, values_only=True))):
-            row = {header: str(values[index] or "") for index, header in enumerate(headers) if header}
-            if row.get("MAC Address (CPUID)", "").upper() == normalized:
+        if not rows and self.xlsx_path.exists():
+            workbook = load_workbook(self.xlsx_path, read_only=True, data_only=True)
+            try:
+                sheet = workbook.active
+                headers = [str(cell.value or "") for cell in sheet[1]]
+                rows = [
+                    {header: str(values[index] or "") for index, header in enumerate(headers) if header}
+                    for values in sheet.iter_rows(min_row=2, values_only=True)
+                ]
+            finally:
                 workbook.close()
-                return row
-        workbook.close()
-        return None
+        duplicates = []
+        for field in ("MAC Address (CPUID)", "UUID (token)", "小卡編號"):
+            values = [row.get(field, "").strip().upper() for row in rows if row.get(field, "").strip()]
+            if len(values) != len(set(values)):
+                duplicates.append(field)
+        return duplicates
+
+    def find_by_mac(self, mac: str) -> dict[str, str] | None:
+        with self._lock:
+            normalized = mac.upper()
+            rows = self.existing_records()
+            for row in reversed(rows):
+                if row.get("MAC Address (CPUID)", "").upper() == normalized:
+                    return row
+            if not self.xlsx_path.exists():
+                return None
+            workbook = load_workbook(self.xlsx_path, read_only=True, data_only=True)
+            try:
+                sheet = workbook.active
+                headers = [str(cell.value or "") for cell in sheet[1]]
+                for values in reversed(list(sheet.iter_rows(min_row=2, values_only=True))):
+                    row = {header: str(values[index] or "") for index, header in enumerate(headers) if header}
+                    if row.get("MAC Address (CPUID)", "").upper() == normalized:
+                        return row
+                return None
+            finally:
+                workbook.close()
 
     def append_csv(self, record: LedgerRecord) -> None:
         with self._lock:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -38,8 +39,12 @@ class RawReplClient:
         self.baudrate = baudrate
         self.timeout = timeout
         self.serial: serial.Serial | None = None
+        self._read_buffer = bytearray()
+        self._entered = False
 
     def __enter__(self) -> RawReplClient:
+        if self._entered:
+            return self
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -49,6 +54,7 @@ class RawReplClient:
                 time.sleep(0.2)
                 self.serial.reset_input_buffer()
                 self._enter_raw_repl()
+                self._entered = True
                 return self
             except (ProvisionError, serial.SerialException) as exc:
                 last_error = exc
@@ -60,6 +66,7 @@ class RawReplClient:
         raise ProvisionError(f"無法進入 raw REPL（已重試 3 次）：{last_error}") from last_error
 
     def __exit__(self, *_: object) -> None:
+        self._entered = False
         if self.serial and self.serial.is_open:
             self.serial.close()
 
@@ -112,20 +119,31 @@ class RawReplClient:
     def _read_until(self, marker: bytes, timeout: float) -> bytes:
         assert self.serial
         deadline = time.monotonic() + timeout
-        received = bytearray()
         while time.monotonic() < deadline:
-            chunk = self.serial.read(256)
+            position = self._read_buffer.find(marker)
+            if position >= 0:
+                end = position + len(marker)
+                result = bytes(self._read_buffer[:end])
+                del self._read_buffer[:end]
+                return result
+            available = getattr(self.serial, "in_waiting", 0)
+            chunk = self.serial.read(max(1, min(256, available)))
             if chunk:
-                received.extend(chunk)
-                if marker in received:
-                    return bytes(received)
+                self._read_buffer.extend(chunk)
         raise ProvisionError(f"序列埠逾時：{self.port}")
 
     def _read_exact(self, size: int, deadline: float) -> bytes:
         assert self.serial
         received = bytearray()
+        if self._read_buffer:
+            take = min(size, len(self._read_buffer))
+            received.extend(self._read_buffer[:take])
+            del self._read_buffer[:take]
         while len(received) < size and time.monotonic() < deadline:
-            received.extend(self.serial.read(size - len(received)))
+            available = getattr(self.serial, "in_waiting", 0)
+            chunk = self.serial.read(max(1, min(size - len(received), available)))
+            if chunk:
+                received.extend(chunk)
         if len(received) != size:
             raise ProvisionError(f"序列埠逾時：{self.port}")
         return bytes(received)
@@ -136,9 +154,10 @@ class EsptoolRunner:
         self.log = log
 
     def flash(self, port: str, firmware: FirmwareInfo) -> None:
+        prefix = self._command_prefix()
         commands = [
-            [sys.executable, "-m", "esptool", "--port", port, "erase-flash"],
-            [sys.executable, "-m", "esptool", "--port", port, "write-flash", "0x1000", str(firmware.path)],
+            [*prefix, "--port", port, "erase-flash"],
+            [*prefix, "--port", port, "write-flash", "0x1000", str(firmware.path)],
         ]
         for command in commands:
             self.log("$ " + " ".join(command))
@@ -147,6 +166,15 @@ class EsptoolRunner:
                 self.log(line)
             if completed.returncode != 0:
                 raise ProvisionError(f"esptool 失敗（{completed.returncode}）：{command[-1]}")
+
+    @staticmethod
+    def _command_prefix() -> list[str]:
+        if getattr(sys, "frozen", False):
+            executable = shutil.which("esptool.exe") or shutil.which("esptool")
+            if executable:
+                return [executable]
+            raise ProvisionError("找不到凍結版所需的 esptool.exe")
+        return [sys.executable, "-m", "esptool"]
 
 
 class ProvisionService:
@@ -170,6 +198,7 @@ class ProvisionService:
         wifi_password: str,
         firmware: FirmwareInfo,
         allocate_card: Callable[[], str],
+        _reflash_attempt: bool = False,
     ) -> LedgerRecord:
         if ";" in ssid:
             raise ProvisionError("SSID 不可含有分號")
@@ -180,12 +209,23 @@ class ProvisionService:
         self.log(f"開啟 {port}，進入 raw REPL")
         try:
             client = RawReplClient(port)
+            try:
+                client.__enter__()
+            except ProvisionError:
+                if _reflash_attempt:
+                    raise
+                self.log("無法進入 raw REPL，執行 erase-flash + write-flash")
+                EsptoolRunner(self.log).flash(port, firmware)
+                return self.run(port, card_number, ssid, wifi_password, firmware, allocate_card, True)
             with client:
                 firmware_version = self._read_firmware(client)
                 if firmware_version and (firmware.version not in firmware_version or firmware.date not in firmware_version):
                     self.log("韌體版本不符，執行 erase-flash + write-flash")
+                    if _reflash_attempt:
+                        raise ProvisionError("韌體重燒後版本仍不符")
+                    client.__exit__(None, None, None)
                     EsptoolRunner(self.log).flash(port, firmware)
-                    raise ProvisionError("韌體已重燒，請重新按開始完成流程")
+                    return self.run(port, card_number, ssid, wifi_password, firmware, allocate_card, True)
 
                 self.step(ProvisionStep.FIRMWARE, 12, f"MicroPython {firmware_version or firmware.version}")
                 mac = self._read_mac(client)
@@ -198,7 +238,7 @@ class ProvisionService:
 
                 self.step(ProvisionStep.CLEAN, 28, "清空檔案系統，保留 boot.py")
                 client.execute(
-                    "import os\n[os.remove(f) for f in os.listdir() if f != 'boot.py']"
+                    "import os\n[os.remove(f) for f in os.listdir() if f != 'boot.py' and not (os.stat(f)[0] & 0x4000)]"
                 )
                 self.step(ProvisionStep.UPLOAD, 35, f"上傳 {len(payload_files) + 2} 個檔案")
                 for index, path in enumerate(payload_files):
@@ -240,7 +280,10 @@ class ProvisionService:
                     result="WAIT",
                     note="",
                 )
-                self.ledger.append_csv(record)
+                try:
+                    self.ledger.append_csv(record)
+                except PermissionError as exc:
+                    raise ProvisionError("CSV 目前被其他程式開啟，請關閉後重試") from exc
                 try:
                     self.ledger.sync_xlsx(record)
                 except PermissionError:
@@ -261,6 +304,8 @@ class ProvisionService:
                 if not mac_match or mac_match.group(1).upper() != mac.upper():
                     raise ProvisionError("驗收 MAC 不一致")
                 details = self._boot_details(boot_log)
+                if details["rssi"] and int(details["rssi"]) < -75:
+                    self.log(f"警告：WiFi 訊號偏弱（{details['rssi']} dBm）")
                 try:
                     self.ledger.update_details(mac, **details)
                 except PermissionError:
@@ -270,7 +315,7 @@ class ProvisionService:
         except serial.SerialException as exc:
             raise ProvisionError(f"COM port 被佔用或無法開啟：{port} ({exc})") from exc
 
-    def retry_boot(self, port: str) -> None:
+    def retry_boot(self, port: str, expected_token: str | None = None, expected_mac: str | None = None) -> None:
         self.log(f"重新開機驗收 {port}（不重傳檔案、不寫新紀錄）")
         with RawReplClient(port) as client:
             client.reset()
@@ -279,12 +324,21 @@ class ProvisionService:
                 raise ProvisionError("啟動 log 出現 Traceback")
             if "ESP Wi-Fi OK" not in boot_log:
                 raise ProvisionError("60 秒內沒有 ESP Wi-Fi OK")
+            token_match = re.search(r"Get token:\s*([0-9a-f-]{36})", boot_log, re.I)
+            mac_match = re.search(r"My MAC Address:\s*([0-9A-F]{12,16})", boot_log, re.I)
+            if expected_token and (not token_match or token_match.group(1).lower() != expected_token.lower()):
+                raise ProvisionError("驗收 token 不一致")
+            if expected_mac and (not mac_match or mac_match.group(1).upper() != expected_mac.upper()):
+                raise ProvisionError("驗收 MAC 不一致")
 
     def _payload_files(self) -> list[Path]:
         payload = self.root / "payload"
         if not payload.exists():
             raise ProvisionError("找不到 payload/ 資料夾")
         ignored = {"boot.py", "token.dat", "wifi.dat"}
+        ignored_found = sorted(path.name for path in payload.iterdir() if path.is_file() and path.name in ignored)
+        if ignored_found:
+            self.log(f"payload/ 略過由工具管理的檔案：{', '.join(ignored_found)}")
         files = sorted(path for path in payload.iterdir() if path.is_file() and path.name not in ignored)
         if not files:
             raise ProvisionError("payload/ 不可為空")
@@ -296,8 +350,9 @@ class ProvisionService:
         match = re.search(r"v(\d+\.\d+\.\d+)", output)
         if not match:
             return None
-        date = re.search(r"20\d{6}", output)
-        return f"{match.group(1)} {date.group(0)}" if date else match.group(1)
+        date = re.search(r"(20\d{2})-?(\d{2})-?(\d{2})", output)
+        normalized_date = "".join(date.groups()) if date else ""
+        return f"{match.group(1)} {normalized_date}" if date else match.group(1)
 
     @staticmethod
     def _read_mac(client: RawReplClient) -> str:
